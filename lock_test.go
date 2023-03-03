@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func makeLockfiles(tb testing.TB, path string, n int) chan *os.File {
@@ -117,6 +118,68 @@ func TestLock(t *testing.T) {
 		}
 	})
 
+	t.Run("Context", func(t *testing.T) {
+		t.Parallel()
+
+		locks := makeLockfiles(t, "/tmp/barney-ci-go-store-lock-test-2", 2)
+
+		f1 := <-locks
+		if f1 == nil {
+			t.FailNow()
+		}
+		defer f1.Close()
+
+		if err := Lock(context.Background(), f1); err != nil {
+			t.Fatal(err)
+		}
+
+		ctx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer stop()
+
+		done := make(chan struct{})
+
+		go func() {
+			f := <-locks
+			if f == nil {
+				close(done)
+				return
+			}
+			defer f.Close()
+			defer close(done)
+
+			if err := Lock(ctx, f); err != nil && !errors.Is(err, ctx.Err()) {
+				t.Error(err)
+			}
+		}()
+		defer func() {
+			<-done
+		}()
+
+		deadlock, stop := context.WithTimeout(context.Background(), 1000*time.Millisecond)
+		defer stop()
+
+		select {
+		case <-ctx.Done():
+			select {
+			case <-done:
+				// OK
+			case <-deadlock.Done():
+				select {
+				case <-done:
+					// Also OK
+				default:
+					t.Fatalf("Lock did not get canceled")
+				}
+			}
+		case <-done:
+			select {
+			case <-ctx.Done():
+				// OK
+			default:
+				t.Fatalf("Lock did not block")
+			}
+		}
+	})
 }
 
 func BenchmarkLock(b *testing.B) {
