@@ -1,0 +1,15 @@
+reponame: barney.ci/go-store
+description: |
+  Pure-Go, cross-platform file locking and atomic swapping library.
+
+users:
+  maintainers:
+  - snaipe@arista.com
+
+x-github-bridge:
+  reviews:
+  - image: test
+    events:
+    - type: pull_request
+    - type: push
+      branch-re: ^main$
