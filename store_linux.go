@@ -53,18 +53,10 @@ func lstatIno(f *os.File, path string) (uint64, error) {
 	}
 }
 
-func deleted(f *os.File) (ok bool, e error) {
-	fino, err := lstatIno(f, "")
-	if err != nil {
-		return true, err
-	}
+func openShared(path string, flag int, mode os.FileMode) (*os.File, error) {
+	return os.OpenFile(path, flag, mode)
+}
 
-	pino, err := lstatIno(nil, f.Name())
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return true, nil
-	case err != nil:
-		return true, err
-	}
-	return fino != pino, nil
+func rename(f OSFile, to string) error {
+	return os.Rename(f.Name(), to)
 }

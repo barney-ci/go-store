@@ -121,7 +121,7 @@ func TestLock(t *testing.T) {
 	t.Run("Context", func(t *testing.T) {
 		t.Parallel()
 
-		locks := makeLockfiles(t, "/tmp/barney-ci-go-store-lock-test-2", 2)
+		locks := makeLockfiles(t, filepath.Join(t.TempDir(), "barney-ci-go-store-lock-test-2"), 2)
 
 		f1 := <-locks
 		if f1 == nil {

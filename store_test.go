@@ -108,3 +108,27 @@ func TestStore(t *testing.T) {
 		}
 	})
 }
+
+func TestRename(t *testing.T) {
+	// Ensure rename() works correctly on all platforms
+
+	// The process should have an open file handle on the destination
+	dir := t.TempDir()
+	f0, err := openShared(filepath.Join(dir, "new"), os.O_RDWR|os.O_CREATE, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f0.Close()
+
+	// Open the original file, then rename it to the destination
+	f, err := openShared(filepath.Join(dir, "orig"), os.O_RDWR|os.O_CREATE, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	if err := rename(f, filepath.Join(dir, "new")); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+}
