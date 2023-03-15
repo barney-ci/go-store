@@ -93,56 +93,60 @@ func lock(ctx context.Context, f OSFile, flags lockFlag) error {
 	default:
 	}
 
-	// This chan gets closed on function return later on
-	done := make(chan struct{})
+	if (flags & lockBlock) != 0 {
+		// If this call is blocking, we have to do extra work to handle the cancellation case.
 
-	// This chan gets closed when the kill goroutine is done
-	killdone := make(chan struct{})
+		// This chan gets closed on function return later on
+		done := make(chan struct{})
 
-	// We _must_ start this goroutine out of the LockOSThread block, otherwise
-	// it'll just kill itself in the go runtime, which panics
-	killchan := make(chan func() error, 1)
-	go func() {
-		killfn := <-killchan
-		defer close(killdone)
+		// This chan gets closed when the kill goroutine is done
+		killdone := make(chan struct{})
 
-		select {
-		case <-done:
-		case <-ctx.Done():
-			// Double-check if we haven't already returned; the signal handler
-			// is gone so we need to avoid tgkilling our thread
+		// We _must_ start this goroutine out of the LockOSThread block, otherwise
+		// it'll just kill itself in the go runtime, which panics
+		killchan := make(chan func() error, 1)
+		go func() {
+			killfn := <-killchan
+			defer close(killdone)
+
 			select {
 			case <-done:
+			case <-ctx.Done():
+				// Double-check if we haven't already returned; the signal handler
+				// is gone so we need to avoid tgkilling our thread
+				select {
+				case <-done:
+					return
+				default:
+				}
+				if err := killfn(); err != nil {
+					panic(fmt.Errorf("Could not interrupt blocked flock call: tgkill: %w", err))
+				}
 				return
-			default:
 			}
-			if err := killfn(); err != nil {
-				panic(fmt.Errorf("Could not interrupt blocked flock call: tgkill: %w", err))
-			}
-			return
-		}
-	}()
+		}()
 
-	// Force the goroutine to stay on the same thread; this is necessary because
-	// we want to ensure the thread that executes the system call is the one
-	// that ends up killed by our signal.
-	runtime.LockOSThread()
+		// Force the goroutine to stay on the same thread; this is necessary because
+		// we want to ensure the thread that executes the system call is the one
+		// that ends up killed by our signal.
+		runtime.LockOSThread()
 
-	// This _must_ be deferred to ensure it runs even during a panic, not just
-	// function return.
-	defer runtime.UnlockOSThread()
+		// This _must_ be deferred to ensure it runs even during a panic, not just
+		// function return.
+		defer runtime.UnlockOSThread()
 
-	// Signal the kill goroutine to no longer kill the thread, and wait for it to
-	// exit _before_ unlocking the OS thread.
-	defer func() {
-		close(done)
-		<-killdone
-	}()
+		// Signal the kill goroutine to no longer kill the thread, and wait for it to
+		// exit _before_ unlocking the OS thread.
+		defer func() {
+			close(done)
+			<-killdone
+		}()
 
-	pid := unix.Getpid()
-	tid := gettid()
+		pid := unix.Getpid()
+		tid := gettid()
 
-	killchan <- func() error { return tgkill(pid, tid, signo) }
+		killchan <- func() error { return tgkill(pid, tid, signo) }
+	}
 
 	for {
 		err := unix.Flock(int(f.Fd()), sysFlags)
