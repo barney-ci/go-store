@@ -10,10 +10,6 @@
 package store
 
 import (
-	"context"
-	"fmt"
-	"runtime"
-
 	"golang.org/x/sys/unix"
 )
 
@@ -76,7 +72,9 @@ func init() {
 	}
 }
 
-func lock(ctx context.Context, f OSFile, flags lockFlag) error {
+func preLock(f OSFile, flags lockFlag) {}
+
+func lock(f OSFile, flags lockFlag) error {
 	var sysFlags int
 	if (flags & lockExcl) != 0 {
 		sysFlags |= unix.LOCK_EX
@@ -87,87 +85,32 @@ func lock(ctx context.Context, f OSFile, flags lockFlag) error {
 		sysFlags |= unix.LOCK_NB
 	}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
+	err := unix.Flock(int(f.Fd()), sysFlags)
+	switch {
+	case err == nil:
+		return nil
+	case err == unix.EINTR:
+		return errLockInterrupted
+	case err == unix.EWOULDBLOCK:
+		return wrapSyscallError("flock", ErrWouldBlock)
 	default:
-	}
-
-	if (flags & lockBlock) != 0 {
-		// If this call is blocking, we have to do extra work to handle the cancellation case.
-
-		// This chan gets closed on function return later on
-		done := make(chan struct{})
-
-		// This chan gets closed when the kill goroutine is done
-		killdone := make(chan struct{})
-
-		// We _must_ start this goroutine out of the LockOSThread block, otherwise
-		// it'll just kill itself in the go runtime, which panics
-		killchan := make(chan func() error, 1)
-		go func() {
-			killfn := <-killchan
-			defer close(killdone)
-
-			select {
-			case <-done:
-			case <-ctx.Done():
-				// Double-check if we haven't already returned; the signal handler
-				// is gone so we need to avoid tgkilling our thread
-				select {
-				case <-done:
-					return
-				default:
-				}
-				if err := killfn(); err != nil {
-					panic(fmt.Errorf("Could not interrupt blocked flock call: tgkill: %w", err))
-				}
-				return
-			}
-		}()
-
-		// Force the goroutine to stay on the same thread; this is necessary because
-		// we want to ensure the thread that executes the system call is the one
-		// that ends up killed by our signal.
-		runtime.LockOSThread()
-
-		// This _must_ be deferred to ensure it runs even during a panic, not just
-		// function return.
-		defer runtime.UnlockOSThread()
-
-		// Signal the kill goroutine to no longer kill the thread, and wait for it to
-		// exit _before_ unlocking the OS thread.
-		defer func() {
-			close(done)
-			<-killdone
-		}()
-
-		pid := unix.Getpid()
-		tid := gettid()
-
-		killchan <- func() error { return tgkill(pid, tid, signo) }
-	}
-
-	for {
-		err := unix.Flock(int(f.Fd()), sysFlags)
-		switch {
-		case err == nil:
-			return nil
-		case err == unix.EWOULDBLOCK:
-			return wrapSyscallError("flock", ErrWouldBlock)
-		case err == unix.EINTR:
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-				// This was a spurious EINTR wakeup. Retry the syscall.
-			}
-		default:
-			return wrapSyscallError("flock", err)
-		}
+		return wrapSyscallError("flock", err)
 	}
 }
 
 func unlock(f OSFile) error {
 	return wrapSyscallError("flock", unix.Flock(int(f.Fd()), unix.LOCK_UN))
+}
+
+func lockGetThread() (any, error) {
+	pid := unix.Getpid()
+	tid := gettid()
+	return func() (int, int) { return pid, tid }, nil
+}
+
+func lockCloseThread(any) {}
+
+func lockInterrupt(pidtid any) error {
+	pid, tid := pidtid.(func() (int, int))()
+	return tgkill(pid, tid, signo)
 }

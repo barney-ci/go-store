@@ -60,7 +60,7 @@ func (store *Store[T]) Load(ctx context.Context, path string, v *T) (canary any,
 	default:
 	}
 
-	rdf, err := os.OpenFile(path, os.O_RDONLY, 0)
+	rdf, err := openShared(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func (store *Store[T]) Store(ctx context.Context, path string, mode os.FileMode,
 	// swap it with the original. This avoid corrupting the store should
 	// the process terminate mid-write.
 
-	wf, err := os.OpenFile(path+".lock", os.O_WRONLY|os.O_CREATE, mode&^os.ModeType)
+	wf, err := openShared(path+".lock", os.O_WRONLY|os.O_CREATE, mode&^os.ModeType)
 	if err != nil {
 		return err
 	}
@@ -145,7 +145,7 @@ func (store *Store[T]) Store(ctx context.Context, path string, mode os.FileMode,
 		return err
 	}
 
-	if err := os.Truncate(wf.Name(), 0); err != nil {
+	if err := wf.Truncate(0); err != nil {
 		return err
 	}
 
@@ -153,7 +153,7 @@ func (store *Store[T]) Store(ctx context.Context, path string, mode os.FileMode,
 		return err
 	}
 
-	return os.Rename(wf.Name(), path)
+	return rename(wf, path)
 }
 
 // LoadAndStoreFunc is the signature of the user callback called by LoadAndStore.
@@ -198,4 +198,20 @@ func (store *Store[T]) LoadAndStore(ctx context.Context, path string, mode os.Fi
 		err = store.tryLoadAndStore(ctx, path, mode, fn)
 	}
 	return err
+}
+
+func deleted(f *os.File) (ok bool, e error) {
+	fino, err := lstatIno(f, "")
+	if err != nil {
+		return true, err
+	}
+
+	pino, err := lstatIno(nil, f.Name())
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return true, nil
+	case err != nil:
+		return true, err
+	}
+	return fino != pino, nil
 }

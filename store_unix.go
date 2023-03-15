@@ -10,28 +10,11 @@
 package store
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
 	"golang.org/x/sys/unix"
 )
-
-func deleted(f *os.File) (bool, error) {
-	var fstat, pathstat unix.Stat_t
-
-	if err := unix.Fstat(int(f.Fd()), &fstat); err != nil {
-		return true, &os.PathError{Op: "fstat", Path: "<fd>", Err: err}
-	}
-	err := unix.Lstat(f.Name(), &pathstat)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return true, nil
-	case err != nil:
-		return true, &os.PathError{Op: "stat", Path: f.Name(), Err: err}
-	}
-	return fstat.Ino != pathstat.Ino, nil
-}
 
 func lstatIno(f *os.File, path string) (uint64, error) {
 	var stat unix.Stat_t
@@ -45,4 +28,12 @@ func lstatIno(f *os.File, path string) (uint64, error) {
 		}
 	}
 	return stat.Ino, nil
+}
+
+func openShared(path string, flag int, mode os.FileMode) (*os.File, error) {
+	return os.OpenFile(path, flag, mode)
+}
+
+func rename(f OSFile, to string) error {
+	return os.Rename(f.Name(), to)
 }
