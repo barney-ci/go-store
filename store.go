@@ -32,7 +32,7 @@ type Encoder interface {
 //
 //	st := store.New[Type](json.NewEncoder, json.NewDecoder)
 //
-//	err := st.LoadStore(context.Background(), "/path/to/state.json", 0666, func(val *Type) error {
+//	err := st.LoadAndStore(context.Background(), "/path/to/state.json", 0666, func(val *Type) error {
 //	    // Use and/or modify val; it will get re-marshaled to the file
 //	    return nil
 //	})
@@ -149,18 +149,18 @@ func (store *Store[T]) Store(ctx context.Context, path string, mode os.FileMode,
 	return os.Rename(wf.Name(), path)
 }
 
-// LoadStoreFunc is the signature of the user callback called by LoadStore.
+// LoadAndStoreFunc is the signature of the user callback called by LoadAndStore.
 //
-// LoadStore calls the function with val set to a non-nil pointer to the
+// LoadAndStore calls the function with val set to a non-nil pointer to the
 // value that was unmarshaled from the content of the specified file.
 //
 // If the value fails to load (commonly, because the file does not exist, or
 // less commonly, because the file fails to unmarshal), the function is still
 // called with val set to a pointer to the zero value of T, and err is set to
 // the error that occured during loading.
-type LoadStoreFunc[T any] func(ctx context.Context, val *T, err error) error
+type LoadAndStoreFunc[T any] func(ctx context.Context, val *T, err error) error
 
-func (store *Store[T]) tryLoadStore(ctx context.Context, path string, mode os.FileMode, canary []byte, fn LoadStoreFunc[T]) ([]byte, error) {
+func (store *Store[T]) tryLoadAndStore(ctx context.Context, path string, mode os.FileMode, canary []byte, fn LoadAndStoreFunc[T]) ([]byte, error) {
 	var value T
 
 	// First, open the path with a read lock, and hold it. If the path doesn't
@@ -183,26 +183,26 @@ func (store *Store[T]) tryLoadStore(ctx context.Context, path string, mode os.Fi
 	return newCanary, err
 }
 
-// LoadStore loads the file at path and calls the specified function with the
+// LoadAndStore loads the file at path and calls the specified function with the
 // result of that load, as if store.Load(ctx, path, &v) was called.
 //
 // The user function is then free to modify that value. If it returns without
-// an error, LoadStore attempts to store the value is stored back into the file.
+// an error, LoadAndStore attempts to store the value back into the file.
 //
 // If the underlying file did not change since it first loaded, the store succeeds.
 // Otherwise, it is aborted, and the process is retried, reloading the file and
 // calling the user function for re-modification.
 //
-// In effect, LoadStore has Compare-and-Swap semantics; the function is preferred
+// In effect, LoadAndStore has Compare-and-Swap semantics; the function is preferred
 // over Load and Store when the caller needs to update partially the contents of
 // the file.
-func (store *Store[T]) LoadStore(ctx context.Context, path string, mode os.FileMode, fn LoadStoreFunc[T]) error {
+func (store *Store[T]) LoadAndStore(ctx context.Context, path string, mode os.FileMode, fn LoadAndStoreFunc[T]) error {
 	var (
 		canary []byte
 		err    = ErrRetry
 	)
 	for err == ErrRetry {
-		canary, err = store.tryLoadStore(ctx, path, mode, canary, fn)
+		canary, err = store.tryLoadAndStore(ctx, path, mode, canary, fn)
 	}
 	return err
 }

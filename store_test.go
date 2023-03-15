@@ -26,7 +26,7 @@ func TestStore(t *testing.T) {
 	store := New[Test](json.NewEncoder, json.NewDecoder)
 	dir := t.TempDir()
 
-	// Test whether LoadStore correctly applies modifications
+	// Test whether LoadAndStore correctly applies modifications
 	t.Run("Modify", func(t *testing.T) {
 		if err := store.Load(context.Background(), "testdata/example.json", &val); err != nil {
 			t.Fatal(err)
@@ -42,7 +42,7 @@ func TestStore(t *testing.T) {
 			t.Fatal("expected Store to have created example.json, got error", err)
 		}
 
-		err := store.LoadStore(context.Background(), filepath.Join(dir, "example.json"), 0777, func(ctx context.Context, val *Test, _ error) error {
+		err := store.LoadAndStore(context.Background(), filepath.Join(dir, "example.json"), 0777, func(ctx context.Context, val *Test, _ error) error {
 			val.Example = "modified"
 			return nil
 		})
@@ -58,9 +58,9 @@ func TestStore(t *testing.T) {
 		}
 	})
 
-	// Test whether LoadStore works with load errors
+	// Test whether LoadAndStore works with load errors
 	t.Run("NotExist", func(t *testing.T) {
-		err := store.LoadStore(context.Background(), filepath.Join(dir, "missing.json"), 0777, func(ctx context.Context, val *Test, err error) error {
+		err := store.LoadAndStore(context.Background(), filepath.Join(dir, "missing.json"), 0777, func(ctx context.Context, val *Test, err error) error {
 			if !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("error must be ErrNotExist, got %q instead", err)
 			}
