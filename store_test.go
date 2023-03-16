@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -28,14 +29,14 @@ func TestStore(t *testing.T) {
 
 	// Test whether LoadAndStore correctly applies modifications
 	t.Run("Modify", func(t *testing.T) {
-		if err := store.Load(context.Background(), "testdata/example.json", &val); err != nil {
+		if _, err := store.Load(context.Background(), "testdata/example.json", &val); err != nil {
 			t.Fatal(err)
 		}
 		if val.Example != "original" {
 			t.Fatalf("expected original, got %v", val.Example)
 		}
 
-		if err := store.Store(context.Background(), filepath.Join(dir, "example.json"), 0777, &val); err != nil {
+		if err := store.Store(context.Background(), filepath.Join(dir, "example.json"), 0777, &val, nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Stat(filepath.Join(dir, "example.json")); err != nil {
@@ -50,7 +51,7 @@ func TestStore(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := store.Load(context.Background(), filepath.Join(dir, "example.json"), &val); err != nil {
+		if _, err := store.Load(context.Background(), filepath.Join(dir, "example.json"), &val); err != nil {
 			t.Fatal(err)
 		}
 		if val.Example != "modified" {
@@ -74,6 +75,36 @@ func TestStore(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+	})
+
+	t.Run("Stress", func(t *testing.T) {
+		store := New[int](json.NewEncoder, json.NewDecoder)
+
+		const total = 1000
+
+		var wait sync.WaitGroup
+		for i := 0; i < total; i++ {
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				err := store.LoadAndStore(context.Background(), filepath.Join(dir, "num"), 0777, func(ctx context.Context, val *int, err error) error {
+					*val++
+					return nil
+				})
+				if err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		wait.Wait()
+
+		var num int
+		if _, err := store.Load(context.Background(), filepath.Join(dir, "num"), &num); err != nil {
+			t.Fatal(err)
+		}
+		if num != total {
+			t.Fatalf("expected total to be %d, got %d", total, num)
 		}
 	})
 }

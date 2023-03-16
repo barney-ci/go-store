@@ -7,9 +7,7 @@
 package store
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha1"
 	"errors"
 	"io"
 	"os"
@@ -54,48 +52,39 @@ func New[T any, E Encoder, D Decoder](newEncoder func(io.Writer) E, newDecoder f
 // Load reads the contents of the file at path and unmarshals it into v.
 //
 // Load may block if another store is in the process of writing to the file.
-func (store *Store[T]) Load(ctx context.Context, path string, v *T) error {
-	_, unlock, err := store.load(ctx, path, v)
-	if unlock != nil {
-		unlock()
-	}
-	return err
-}
+func (store *Store[T]) Load(ctx context.Context, path string, v *T) (canary any, err error) {
 
-func (store *Store[T]) load(ctx context.Context, path string, v *T) (canary []byte, unlock func(), err error) {
 	select {
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return nil, ctx.Err()
 	default:
 	}
 
 	rdf, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	defer rdf.Close()
 
 	if err := RLock(ctx, rdf); err != nil {
-		rdf.Close()
-		return nil, nil, err
+		return nil, err
 	}
 	select {
 	case <-ctx.Done():
-		rdf.Close()
-		return nil, nil, ctx.Err()
+		return nil, ctx.Err()
 	default:
 	}
 
-	// SHA-1 may be broken for cryptographic applications, but it's the fastest option
-	// to get a content-hash where attacks don't matter. If someone breaks our hash,
-	// it just means that Store gets to overwrite.
-	digest := sha1.New()
-
-	if err := store.newDecoder(io.TeeReader(rdf, digest)).Decode(v); err != nil {
-		rdf.Close()
-		return nil, nil, err
+	if err := store.newDecoder(rdf).Decode(v); err != nil {
+		return nil, err
 	}
 
-	return digest.Sum(nil), func() { rdf.Close() }, nil
+	newCanary, err := lstatIno(rdf, "")
+	if err != nil {
+		return nil, err
+	}
+
+	return newCanary, nil
 }
 
 // Store marshals v and writes the result into the specified path, overwriting
@@ -105,7 +94,8 @@ func (store *Store[T]) load(ctx context.Context, path string, v *T) (canary []by
 // half-written and corrupt.
 //
 // Store may block if another store is in the process of reading the file.
-func (store *Store[T]) Store(ctx context.Context, path string, mode os.FileMode, v *T) error {
+func (store *Store[T]) Store(ctx context.Context, path string, mode os.FileMode, v *T, canary any) (err error) {
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -121,10 +111,23 @@ func (store *Store[T]) Store(ctx context.Context, path string, mode os.FileMode,
 		return err
 	}
 	defer wf.Close()
-	defer os.Remove(wf.Name())
 
 	if err := Lock(ctx, wf); err != nil {
 		return err
+	}
+
+	oldCanary, _ := canary.(uint64)
+	newCanary, err := lstatIno(nil, path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// Compare canaries -- we use inodes as canaries, so an inode of 0 means
+	// the file was missing.
+	if newCanary != oldCanary {
+		// The destination changed while we were waiting for the lock. This
+		// means that another concurrent store completed, and we need
+		// to retry.
+		return ErrRetry
 	}
 
 	if ko, err := deleted(wf); ko {
@@ -139,6 +142,10 @@ func (store *Store[T]) Store(ctx context.Context, path string, mode os.FileMode,
 			// There's nothing we can do except return ErrRetry.
 			err = ErrRetry
 		}
+		return err
+	}
+
+	if err := os.Truncate(wf.Name(), 0); err != nil {
 		return err
 	}
 
@@ -160,27 +167,16 @@ func (store *Store[T]) Store(ctx context.Context, path string, mode os.FileMode,
 // the error that occured during loading.
 type LoadAndStoreFunc[T any] func(ctx context.Context, val *T, err error) error
 
-func (store *Store[T]) tryLoadAndStore(ctx context.Context, path string, mode os.FileMode, canary []byte, fn LoadAndStoreFunc[T]) ([]byte, error) {
+func (store *Store[T]) tryLoadAndStore(ctx context.Context, path string, mode os.FileMode, fn LoadAndStoreFunc[T]) error {
 	var value T
 
-	// First, open the path with a read lock, and hold it. If the path doesn't
-	// exist, it's non-fatal.
-	newCanary, unlock, err := store.load(ctx, path, &value)
-	if err == nil {
-		defer unlock()
-
-		// Got a lock; if the content changed since, error out.
-		if len(canary) != 0 && !bytes.Equal(canary, newCanary) {
-			return newCanary, ErrRetry
-		}
-	}
+	canary, err := store.Load(ctx, path, &value)
 
 	if err := fn(ctx, &value, err); err != nil {
-		return newCanary, err
+		return err
 	}
 
-	err = store.Store(ctx, path, mode, &value)
-	return newCanary, err
+	return store.Store(ctx, path, mode, &value, canary)
 }
 
 // LoadAndStore loads the file at path and calls the specified function with the
@@ -197,12 +193,9 @@ func (store *Store[T]) tryLoadAndStore(ctx context.Context, path string, mode os
 // over Load and Store when the caller needs to update partially the contents of
 // the file.
 func (store *Store[T]) LoadAndStore(ctx context.Context, path string, mode os.FileMode, fn LoadAndStoreFunc[T]) error {
-	var (
-		canary []byte
-		err    = ErrRetry
-	)
+	err := ErrRetry
 	for err == ErrRetry {
-		canary, err = store.tryLoadAndStore(ctx, path, mode, canary, fn)
+		err = store.tryLoadAndStore(ctx, path, mode, fn)
 	}
 	return err
 }

@@ -20,7 +20,12 @@ import (
 // lstatIno tries to use statx with STATX_INO (which is less IO demanding than
 // regular stat), falling back to lstat/fstat if the syscall isn't implemented,
 // for instance if the kernel is too old.
-func lstatIno(dirfd int, path string) (uint64, error) {
+func lstatIno(f *os.File, path string) (uint64, error) {
+	dirfd := unix.AT_FDCWD
+	if f != nil {
+		dirfd = int(f.Fd())
+	}
+
 	var statx unix.Statx_t
 	err := unix.Statx(dirfd, path, unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, unix.STATX_INO, &statx)
 	switch {
@@ -49,12 +54,12 @@ func lstatIno(dirfd int, path string) (uint64, error) {
 }
 
 func deleted(f *os.File) (ok bool, e error) {
-	fino, err := lstatIno(int(f.Fd()), "")
+	fino, err := lstatIno(f, "")
 	if err != nil {
 		return true, err
 	}
 
-	pino, err := lstatIno(unix.AT_FDCWD, f.Name())
+	pino, err := lstatIno(nil, f.Name())
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return true, nil

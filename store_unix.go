@@ -11,6 +11,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -30,4 +31,18 @@ func deleted(f *os.File) (bool, error) {
 		return true, &os.PathError{Op: "stat", Path: f.Name(), Err: err}
 	}
 	return fstat.Ino != pathstat.Ino, nil
+}
+
+func lstatIno(f *os.File, path string) (uint64, error) {
+	var stat unix.Stat_t
+	if path == "" {
+		if err := unix.Fstat(int(f.Fd()), &stat); err != nil {
+			return 0, &os.PathError{Op: "fstat", Path: fmt.Sprintf("fd:%d", int(f.Fd())), Err: err}
+		}
+	} else {
+		if err := unix.Lstat(path, &stat); err != nil {
+			return 0, &os.PathError{Op: "stat", Path: path, Err: err}
+		}
+	}
+	return stat.Ino, nil
 }
