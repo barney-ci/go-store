@@ -163,7 +163,7 @@ func lock(ctx context.Context, f OSFile, flags lockFlag) error {
 				// This was a spurious EINTR wakeup. Retry the syscall.
 			}
 		default:
-			return wrapSyscallError("flock", ErrWouldBlock)
+			return wrapSyscallError("flock", err)
 		}
 	}
 }
