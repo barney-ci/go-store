@@ -90,7 +90,7 @@ func TryRLock(f OSFile) error {
 // that the lock gets released automatically once all file descriptors are
 // closed.
 func Unlock(f OSFile) error {
-	return wrapPathError("tryrlock", f.Name(), unlock(f))
+	return wrapPathError("unlock", f.Name(), unlock(f))
 }
 
 func wrapSyscallError(op string, err error) error {
