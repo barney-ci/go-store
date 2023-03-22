@@ -19,6 +19,8 @@ var ErrWouldBlock = errWouldBlock
 
 var procCancelSynchronousIo = windows.MustLoadDLL("kernel32.dll").MustFindProc("CancelSynchronousIo")
 
+const systemHasInterruptibleLocks = true
+
 func cancelSynchronousIo(h windows.Handle) error {
 	r1, _, e1 := syscall.SyscallN(procCancelSynchronousIo.Addr(), uintptr(h))
 	if r1 == 0 {

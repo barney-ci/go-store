@@ -117,6 +117,10 @@ func interruptibleLock(ctx context.Context, f OSFile, flags lockFlag) error {
 	default:
 	}
 
+	if !systemHasInterruptibleLocks {
+		return interruptibleLockFallback(ctx, f, flags)
+	}
+
 	if (flags & lockBlock) != 0 {
 		// If this call is blocking, we have to do extra work to handle the cancellation case.
 
@@ -195,5 +199,33 @@ func interruptibleLock(ctx context.Context, f OSFile, flags lockFlag) error {
 		default:
 			return err
 		}
+	}
+}
+
+// interruptibleLockFallback falls back to a leaking goroutine approach
+// on systems that do not support lock interrupts. This isn't great, of course,
+// but allows the library to remain functional on these systems.
+func interruptibleLockFallback(ctx context.Context, f OSFile, flags lockFlag) error {
+	if (flags & lockBlock) == 0 {
+		return lock(f, flags)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- lock(f, flags)
+	}()
+
+	select {
+	case <-ctx.Done():
+		// If the goroutine finishes at the same time the context is done, we
+		// want to give precedence to the goroutine error
+		select {
+		case err := <-done:
+			return err
+		default:
+		}
+		return ctx.Err()
+	case err := <-done:
+		return err
 	}
 }

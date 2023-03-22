@@ -4,8 +4,8 @@
 // in the LICENSE file.
 //
 
-//go:build unix
-// +build unix
+//go:build unix && !darwin
+// +build unix,!darwin
 
 package store
 
@@ -14,6 +14,8 @@ import (
 )
 
 var ErrWouldBlock = &likeError{Err: errWouldBlock, Like: unix.EWOULDBLOCK}
+
+const systemHasInterruptibleLocks = true
 
 const (
 	// Picked to match Go's goroutine preemption signal.
